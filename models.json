@@ -1,0 +1,23 @@
+[
+    {
+        "name": "Qwen3-0.6B",
+        "num_hidden_layers": 28,
+        "num_key_and_value_heads": 8,
+        "head_dim": 128,
+        "parameter_count": 600000000
+    },
+    {
+        "name": "Qwen3-8B",
+        "num_hidden_layers": 36,
+        "num_key_and_value_heads": 8,
+        "head_dim": 128,
+        "parameter_count": 8200000000
+    },
+    {
+        "name": "Kimi-K3",
+        "num_hidden_layers": 93,
+        "num_key_and_value_heads": 96,
+        "head_dim": 128,
+        "parameter_count": 2800000000000
+    }
+]
