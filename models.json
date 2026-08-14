@@ -11,7 +11,8 @@
         "num_hidden_layers": 36,
         "num_key_and_value_heads": 8,
         "head_dim": 128,
-        "parameter_count": 8200000000
+        "parameter_count": 8200000000,
+        "repo_id": "Qwen/Qwen3-8B-GGUF"
     },
     {
         "name": "Kimi-K3",

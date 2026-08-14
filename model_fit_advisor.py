@@ -1,5 +1,9 @@
 import json
 import sys
+import requests
+
+# Hugging Face API base URL as a constant
+HF_API_BASE_URL = "https://huggingface.co/api/models/"
 
 # Estimated CUDA overhead in GiB as a constant
 CUDA_OVERHEAD_GIB = 0.5
@@ -7,13 +11,31 @@ CUDA_OVERHEAD_GIB = 0.5
 # fp16, int8 and int4 constant (bytes per parameter)
 PRECISIONS = {"fp16": 2, "int8": 1, "int4": 0.5}
 
-
 # KV constants
 KEY_AND_VALUE = 2
 KV_CACHE_BYTES = 2
 
+def fetch_repo_data(repo_id):
+    response = requests.get(f"{HF_API_BASE_URL}{repo_id}?blobs=true", timeout=30)
+    response.raise_for_status()
+    return response.json()
+
+def collect_gguf_artifacts(repo_data):
+    data = []
+    for file in repo_data["siblings"]:
+        if file["rfilename"].endswith(".gguf"):
+            file_size_bytes = file["size"]
+            data.append(
+                {
+                    "filename": file["rfilename"],
+                    "file_size_bytes": file_size_bytes,
+                    "artifact_size_gib": compute_artifact_size_gib(file_size_bytes),
+                }
+            )
+    return data
+
 def compute_artifact_size_gib(file_size_bytes):
-    total_gib = file_size_bytes / 1024 ** 3
+    total_gib = file_size_bytes / 1024**3
     return total_gib
 
 # Function that computes the weight memory in GiB from given parameters and precision weight bytes per parameter
@@ -21,10 +43,12 @@ def compute_weight_memory_gib(parameter_count, bytes_per_parameter):
     total_gib = (parameter_count * bytes_per_parameter) / 1024**3
     return total_gib
 
+
 # Function that computes the memory budget in GiB that is left for the KV cache
 def compute_memory_budget_gib(gpu_size, weight_memory):
     total_gib = gpu_size - weight_memory - CUDA_OVERHEAD_GIB
     return total_gib
+
 
 # Function that computes the total GiB KV costs per token
 def compute_kv_per_token_gib(layers, kv_heads, head_dim):
@@ -33,10 +57,12 @@ def compute_kv_per_token_gib(layers, kv_heads, head_dim):
     ) / 1024**3
     return total_gib
 
+
 # Function that computes the maximum possible context length with given model and precision
 def compute_max_context(memory_budget, kv_per_token):
     total_tokens = memory_budget / kv_per_token
     return total_tokens
+
 
 if __name__ == "__main__":
 
@@ -86,7 +112,9 @@ if __name__ == "__main__":
             )
 
             # Computing the memory budget of the current model & weight precision and assign it to a variable
-            memory_budget_gib = compute_memory_budget_gib(gpu_size_gib, weight_memory_gib)
+            memory_budget_gib = compute_memory_budget_gib(
+                gpu_size_gib, weight_memory_gib
+            )
 
             # Write detailed a report block if the model fits inside user's GPU, otherwise tell the user his GPU is too small and where the issue is
             if memory_budget_gib > 0:
