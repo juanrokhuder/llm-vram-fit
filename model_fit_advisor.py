@@ -1,26 +1,42 @@
 import json
 import sys
+from pathlib import Path
+
 import requests
 
-# Hugging Face API base URL as a constant
 HF_API_BASE_URL = "https://huggingface.co/api/models/"
+REQUEST_TIMEOUT_SECONDS = 30
 
-# Estimated CUDA overhead in GiB as a constant
+BYTES_PER_GIB = 1024 ** 3
+
+# Reserve an estimated amount for CUDA runtime overhead not included in the GGUF artifact size.
 CUDA_OVERHEAD_GIB = 0.5
 
-# fp16, int8 and int4 constant (bytes per parameter)
-PRECISIONS = {"fp16": 2, "int8": 1, "int4": 0.5}
+KEY_AND_VALUE_TENSORS = 2
+# Assumes FP16 KV-cache storage at two bytes per element.
+BYTES_PER_KV_CACHE_ELEMENT = 2
 
-# KV constants
-KEY_AND_VALUE = 2
-KV_CACHE_BYTES = 2
+# Resolve models.json relative to this script rather than the current working directory.
+MODELS_PATH = Path(__file__).with_name("models.json")
+
 
 def fetch_repo_data(repo_id):
-    response = requests.get(f"{HF_API_BASE_URL}{repo_id}?blobs=true", timeout=30)
+    """Fetch and return metadata for a Hugging Face model repository."""
+    response = requests.get(
+        f"{HF_API_BASE_URL}{repo_id}?blobs=true", timeout=REQUEST_TIMEOUT_SECONDS
+    )
     response.raise_for_status()
     return response.json()
 
+
+def compute_artifact_size_gib(file_size_bytes):
+    """Convert an artifact size from bytes to GiB."""
+    total_artifact_gib = file_size_bytes / BYTES_PER_GIB
+    return total_artifact_gib
+
+
 def collect_gguf_artifacts(repo_data):
+    """Extract GGUF artifact filenames and byte/GiB sizes from repository metadata."""
     data = []
     for file in repo_data["siblings"]:
         if file["rfilename"].endswith(".gguf"):
@@ -34,111 +50,108 @@ def collect_gguf_artifacts(repo_data):
             )
     return data
 
-def compute_artifact_size_gib(file_size_bytes):
-    total_gib = file_size_bytes / 1024**3
-    return total_gib
 
-# Function that computes the weight memory in GiB from given parameters and precision weight bytes per parameter
-def compute_weight_memory_gib(parameter_count, bytes_per_parameter):
-    total_gib = (parameter_count * bytes_per_parameter) / 1024**3
-    return total_gib
+def compute_memory_budget_gib(gpu_size_gib, artifact_size_gib):
+    """Return VRAM available for KV cache after the artifact and estimated CUDA overhead."""
+    total_memory_budget_gib = gpu_size_gib - artifact_size_gib - CUDA_OVERHEAD_GIB
+    return total_memory_budget_gib
 
 
-# Function that computes the memory budget in GiB that is left for the KV cache
-def compute_memory_budget_gib(gpu_size, weight_memory):
-    total_gib = gpu_size - weight_memory - CUDA_OVERHEAD_GIB
-    return total_gib
-
-
-# Function that computes the total GiB KV costs per token
 def compute_kv_per_token_gib(layers, kv_heads, head_dim):
-    total_gib = (
-        KEY_AND_VALUE * layers * kv_heads * head_dim * KV_CACHE_BYTES
-    ) / 1024**3
-    return total_gib
+    """Estimate KV cache memory in GiB per token for a model architecture."""
+    total_kv_per_token_gib = (
+        KEY_AND_VALUE_TENSORS
+        * layers
+        * kv_heads
+        * head_dim
+        * BYTES_PER_KV_CACHE_ELEMENT
+    ) / BYTES_PER_GIB
+    return total_kv_per_token_gib
 
 
-# Function that computes the maximum possible context length with given model and precision
-def compute_max_context(memory_budget, kv_per_token):
-    total_tokens = memory_budget / kv_per_token
-    return total_tokens
+def compute_max_context(memory_budget_gib, kv_per_token_gib):
+    """Return the number of KV cache tokens that fit within the memory budget."""
+    total_tokens = memory_budget_gib / kv_per_token_gib
+    return int(total_tokens)
 
 
-if __name__ == "__main__":
+def compute_usable_context(memory_limited_context, model_supported_context):
+    """Return the smaller value of the memory limited and model supported context lengths."""
+    usable_context = min(memory_limited_context, model_supported_context)
+    return usable_context
 
-    # Reading the json file with the models and storing the data in a variable called "models"
-    with open("models.json", "r") as f:
+
+def main():
+    """Run the CLI and generate model fit reports."""
+
+    with open(MODELS_PATH, "r") as f:
         models = json.load(f)
 
-    # CLI option to type in GPU size in GiB
+    # Use a positional CLI argument when provided, otherwise prompt interactively.
     if len(sys.argv) > 1:
         try:
             gpu_size_gib = float(sys.argv[1])
         except ValueError:
             print(f"{sys.argv[1]} is not a number.")
-            exit()
+            sys.exit(1)
     else:
-        # Let the user try until he types in a float value
         while True:
-            # Asking the user his GPU Size in GiB
             input_gpu_size_gib = input("What is the size of your GPU in GiB?: ")
-            # Convert the string input to a float, if he doesn't submit a number, throw error
             try:
                 gpu_size_gib = float(input_gpu_size_gib)
                 break
             except ValueError:
                 print("\nERROR: Please submit only a number.\n")
 
-    # List that collects all the reports, which will be written to report.txt
     reports = []
 
-    # Looping over each model in models.json
     for config in models:
-        # List that collects each model report with a preset header line, gets overwritten each run
-        lines = [f"This is the report for the model: {config["name"]}:\n"]
+        model_report_parts = [f"This is the report for {config['name']}.\n"]
 
-        # Assign the computed KV cache per token to a variable
         kv_per_token_gib = compute_kv_per_token_gib(
             config["num_hidden_layers"],
             config["num_key_and_value_heads"],
             config["head_dim"],
         )
 
-        # Looping over the 3 weight precisions
-        for precision, bytes_per_parameter in PRECISIONS.items():
-            # Computing the weight memory of the current model & weight precision and assign it to a variable
-            weight_memory_gib = compute_weight_memory_gib(
-                config["parameter_count"], bytes_per_parameter
-            )
+        repo_data = fetch_repo_data(config["repo_id"])
 
-            # Computing the memory budget of the current model & weight precision and assign it to a variable
-            memory_budget_gib = compute_memory_budget_gib(
-                gpu_size_gib, weight_memory_gib
-            )
+        model_supported_context = config["max_position_embeddings"]
 
-            # Write detailed a report block if the model fits inside user's GPU, otherwise tell the user his GPU is too small and where the issue is
+        gguf_artifacts = collect_gguf_artifacts(repo_data)
+
+        # Evaluate each GGUF artifact independently against the available VRAM.
+        for artifact in gguf_artifacts:
+            filename = artifact["filename"]
+            size_gib = artifact["artifact_size_gib"]
+            memory_budget_gib = compute_memory_budget_gib(gpu_size_gib, size_gib)
             if memory_budget_gib > 0:
-                max_context = compute_max_context(memory_budget_gib, kv_per_token_gib)
-                block = (
-                    f"The total weight memory with {precision} weight precision is {weight_memory_gib:.2f} GiB.\n"
-                    f"The total memory left over for KV cache with {precision} weight precision is {memory_budget_gib:.2f} GiB.\n"
-                    f"The maximum context length that fits with {precision} weight precision is {int(max_context)}.\n"
-                    f"The model with {precision} weight precision fits inside your {gpu_size_gib} GiB GPU.\n"
+                memory_limited_context = compute_max_context(
+                    memory_budget_gib, kv_per_token_gib
                 )
+                usable_context = compute_usable_context(
+                    memory_limited_context, model_supported_context
+                )
+                context_message = f"The maximum usable context for {filename} is {usable_context} tokens.\n"
             else:
-                block = (
-                    f"The total weight memory with {precision} weight precision is {weight_memory_gib:.2f} GiB.\n"
-                    f"The model with {precision} weight precision doesn't fit inside your {gpu_size_gib} GiB GPU.\n"
-                )
+                context_message = f"{filename} does not fit within the available VRAM.\n"
 
-            # Appending the written block to the previous created model report list
-            lines.append(block)
+            entry = (
+                f"These were the findings for {filename} with the size {size_gib:.2f} GiB:\n"
+                f"After the GGUF artifact and estimated CUDA overhead, {memory_budget_gib:.2f} GiB remains.\n"
+                + context_message
+            )
 
-        # Converting the list to a string and assign it to a variable (report), then append the string to the reports list that collects all the reports in one list, then print the report of the current model run, then append
-        report = "".join(lines)
-        reports.append(report)
-        print(report)
+            model_report_parts.append(entry)
 
-    # Write the list that holds all the model reports into a report.txt file as a string
+        model_report = "".join(model_report_parts)
+        reports.append(model_report)
+        print(model_report)
+
+    # Write the combined report to the caller's working directory.
     with open("report.txt", "w") as f:
         f.write("\n".join(reports))
+
+
+if __name__ == "__main__":
+    main()
