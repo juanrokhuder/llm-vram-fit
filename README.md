@@ -74,6 +74,25 @@ This tool produces an estimate, not a guarantee that a model will load successfu
 
 Actual memory usage can differ because of the inference backend, hardware, memory fragmentation, and additional runtime buffers that are not included yet.
 
+## Measured llama.cpp benchmarks
+
+The `benchmarks/` directory has measurements from running Qwen3-0.6B Q8_0 with llama.cpp on an NVIDIA GeForce RTX 3050 Laptop GPU with 4 GB of VRAM.
+
+Two controlled memory experiments change one setting at a time:
+
+- At a fixed context length of 8192 tokens, increasing the micro-batch size from 256 to 512 and 1024 increased the CUDA compute buffer from 17.01 MiB to 34.01 MiB and 68.02 MiB.
+- At a fixed micro-batch size of 256, increasing context length from 2048 to 4096 and 8192 tokens increased the CUDA KV buffer from 224 MiB to 448 MiB and 896 MiB.
+
+![Micro-batch compute-buffer scaling](benchmarks/ubatch_compute_buffer.png)
+
+![Context-length KV-buffer scaling](benchmarks/context_kv_buffer.png)
+
+The concurrency benchmark sends 64-token requests at concurrency levels 1 through 8, with five repetitions per level. In the recorded run, aggregate throughput scaled cleanly through four concurrent requests. At five requests, maximum latency rose sharply from about 0.65 to 1.03 seconds, revealing a queueing and tail-latency boundary even though throughput increased again at higher concurrency.
+
+![llama.cpp concurrency scaling](benchmarks/concurrency_scaling.png)
+
+Raw measurements and summarized results are included as CSV files so the conclusions remain viewable instead of just existing as charts.
+
 ## Tests
 
 Run the test suite with:

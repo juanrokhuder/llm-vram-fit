@@ -1,4 +1,6 @@
 model_filename,quantization,gpu_name,gpu_total_memory_mib,gpu_free_memory_mib,ubatch_size,cuda_compute_buffer_mib,context_length,cuda_model_buffer_mib,cuda_kv_buffer_mib,host_output_buffer_mib,host_compute_buffer_mib,prompt_eval_time_ms,prompt_tokens,prompt_tokens_per_second,generation_time_ms,generated_tokens,generation_tokens_per_second,tracked_cuda_buffers_mib
+Qwen3-0.6B-Q8_0.gguf,Q8_0,NVIDIA GeForce RTX 3050 Laptop GPU,4095,3305,256,14.01,2048,604.15,224.0,0.58,3.01,20.5,16,780.49,502.29,64,125.43,842.16
 Qwen3-0.6B-Q8_0.gguf,Q8_0,NVIDIA GeForce RTX 3050 Laptop GPU,4095,3305,256,17.01,8192,604.15,896.0,0.58,6.01,35.37,16,452.32,516.39,64,122.0,1517.16
+Qwen3-0.6B-Q8_0.gguf,Q8_0,NVIDIA GeForce RTX 3050 Laptop GPU,4095,3305,256,15.01,4096,604.15,448.0,0.58,4.01,49.03,16,326.34,499.14,64,126.22,1067.16
 Qwen3-0.6B-Q8_0.gguf,Q8_0,NVIDIA GeForce RTX 3050 Laptop GPU,4095,3305,512,34.01,8192,604.15,896.0,0.58,12.01,41.62,16,384.42,530.73,64,118.71,1534.16
 Qwen3-0.6B-Q8_0.gguf,Q8_0,NVIDIA GeForce RTX 3050 Laptop GPU,4095,3305,1024,68.02,8192,604.15,896.0,0.58,24.02,41.83,16,382.53,535.89,64,117.56,1568.17
