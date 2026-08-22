@@ -93,6 +93,13 @@ The concurrency benchmark sends 64-token requests at concurrency levels 1 throug
 
 Raw measurements and summarized results are included as CSV files so the conclusions remain viewable instead of just existing as charts.
 
+## Support case studies
+
+The support case studies document real llama.cpp/API failures, their root causes, fixes and verification.
+
+- [Unreachable llama.cpp Server](support_cases/case_01_unreachable_llama_server.md)
+- [Malformed Chat-Completion Request](support_cases/case_02_malformed_chat_request.md)
+
 ## Tests
 
 Run the test suite with:
