@@ -1,4 +1,5 @@
 import json
+import subprocess
 import sys
 from pathlib import Path
 
@@ -81,72 +82,146 @@ def compute_usable_context(memory_limited_context, model_supported_context):
     return usable_context
 
 
+def detect_nvidia_gpus():
+    nvidia_gpus = []
+    try:
+        results = subprocess.run(
+            [
+                "nvidia-smi",
+                "--query-gpu=name,memory.total,memory.free",
+                "--format=csv,noheader,nounits",
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        return nvidia_gpus
+
+    for line in results.stdout.splitlines():
+        values = line.split(",")
+        name = values[0].strip()
+        total_memory_mib = values[1].strip()
+        free_memory_mib = values[2].strip()
+        gpu = {
+            "name": name,
+            "total_memory_mib": int(total_memory_mib),
+            "free_memory_mib": int(free_memory_mib),
+        }
+        nvidia_gpus.append(gpu)
+    return nvidia_gpus
+
+
 def main():
     """Run the CLI and generate model fit reports."""
 
     with open(MODELS_PATH, "r") as f:
         models = json.load(f)
 
+    gpu_targets = []
     # Use a positional CLI argument when provided, otherwise prompt interactively.
     if len(sys.argv) > 1:
         try:
-            gpu_size_gib = float(sys.argv[1])
+            gpu_targets.append(
+                {
+                    "name": "Manual override",
+                    "gpu_memory_gib": float(sys.argv[1]),
+                }
+            )
         except ValueError:
             print(f"{sys.argv[1]} is not a number.")
             sys.exit(1)
     else:
-        while True:
-            input_gpu_size_gib = input("What is the size of your GPU in GiB?: ")
-            try:
-                gpu_size_gib = float(input_gpu_size_gib)
-                break
-            except ValueError:
-                print("\nERROR: Please submit only a number.\n")
+        detected_gpus = detect_nvidia_gpus()
+        if detected_gpus:
+            for gpu in detected_gpus:
+                gpu_memory_gib = gpu["free_memory_mib"] / 1024
+                gpu_targets.append(
+                    {
+                        "name": gpu["name"],
+                        "gpu_memory_gib": gpu_memory_gib,
+                    }
+                )
+        else:
+            while True:
+                input_gpu_size_gib = input("What is the size of your GPU in GiB?: ")
+                try:
+                    gpu_memory_gib = float(input_gpu_size_gib)
+                    gpu_targets.append(
+                        {
+                            "name": "Manual input",
+                            "gpu_memory_gib": gpu_memory_gib,
+                        }
+                    )
+                    break
+                except ValueError:
+                    print("\nERROR: Please submit only a number.\n")
 
     reports = []
-
-    for config in models:
-        model_report_parts = [f"This is the report for {config['name']}.\n"]
-
-        kv_per_token_gib = compute_kv_per_token_gib(
-            config["num_hidden_layers"],
-            config["num_key_and_value_heads"],
-            config["head_dim"],
+    for gpu_target in gpu_targets:
+        gpu_size_gib = gpu_target["gpu_memory_gib"]
+        gpu_report_header = (
+            f"GPU: {gpu_target['name']} ({gpu_size_gib:.2f} GiB available)\n\n"
         )
+        reports.append(gpu_report_header)
+        print(gpu_report_header, end="")
 
-        repo_data = fetch_repo_data(config["repo_id"])
+        for config in models:
+            model_report_parts = [f"This is the report for {config['name']}.\n"]
 
-        model_supported_context = config["max_position_embeddings"]
-
-        gguf_artifacts = collect_gguf_artifacts(repo_data)
-
-        # Evaluate each GGUF artifact independently against the available VRAM.
-        for artifact in gguf_artifacts:
-            filename = artifact["filename"]
-            size_gib = artifact["artifact_size_gib"]
-            memory_budget_gib = compute_memory_budget_gib(gpu_size_gib, size_gib)
-            if memory_budget_gib > 0:
-                memory_limited_context = compute_max_context(
-                    memory_budget_gib, kv_per_token_gib
-                )
-                usable_context = compute_usable_context(
-                    memory_limited_context, model_supported_context
-                )
-                context_message = f"The maximum usable context for {filename} is {usable_context} tokens.\n"
-            else:
-                context_message = f"{filename} does not fit within the available VRAM.\n"
-
-            entry = (
-                f"These were the findings for {filename} with the size {size_gib:.2f} GiB:\n"
-                f"After the GGUF artifact and estimated CUDA overhead, {memory_budget_gib:.2f} GiB remains.\n"
-                + context_message
+            kv_per_token_gib = compute_kv_per_token_gib(
+                config["num_hidden_layers"],
+                config["num_key_and_value_heads"],
+                config["head_dim"],
             )
 
-            model_report_parts.append(entry)
+            repo_data = fetch_repo_data(config["repo_id"])
 
-        model_report = "".join(model_report_parts)
-        reports.append(model_report)
-        print(model_report)
+            model_supported_context = config["max_position_embeddings"]
+
+            gguf_artifacts = collect_gguf_artifacts(repo_data)
+
+            # Evaluate each GGUF artifact independently against the available VRAM.
+            for artifact in gguf_artifacts:
+                filename = artifact["filename"]
+                size_gib = artifact["artifact_size_gib"]
+                memory_budget_gib = compute_memory_budget_gib(gpu_size_gib, size_gib)
+                if memory_budget_gib > 0:
+                    memory_message = (
+                        "After the GGUF artifact and estimated CUDA overhead, "
+                        f"{memory_budget_gib:.2f} GiB remains.\n"
+                    )
+                    memory_limited_context = compute_max_context(
+                        memory_budget_gib, kv_per_token_gib
+                    )
+                    usable_context = compute_usable_context(
+                        memory_limited_context, model_supported_context
+                    )
+                    context_message = (
+                        f"The maximum usable context for {filename} is "
+                        f"{usable_context} tokens.\n"
+                    )
+                else:
+                    memory_deficit_gib = abs(memory_budget_gib)
+                    memory_message = (
+                        f"The GGUF artifact and estimated CUDA overhead exceed the available VRAM "
+                        f"by {memory_deficit_gib:.2f} GiB.\n"
+                    )
+                    context_message = (
+                        f"{filename} does not fit within the available VRAM.\n"
+                    )
+
+                entry = (
+                    f"These were the findings for {filename} with the size {size_gib:.2f} GiB:\n"
+                    + memory_message
+                    + context_message
+                )
+
+                model_report_parts.append(entry)
+
+            model_report = "".join(model_report_parts)
+            reports.append(model_report)
+            print(model_report)
 
     # Write the combined report to the caller's working directory.
     with open("report.txt", "w") as f:

@@ -5,7 +5,7 @@ This Python CLI checks which GGUF files from a Hugging Face model repository fit
 ## What it does
 
 - Fetches the available GGUF files and their sizes from the Hugging Face API.
-- Checks each GGUF file independently against the submitted GPU size.
+- Checks each GGUF file independently against detected available VRAM or a manual override.
 - Estimates how much VRAM remains after the artifact and CUDA overhead.
 - Calculates how many FP16 KV-cache tokens fit into the remaining memory.
 - Prevents the result from exceeding the context length supported by the model.
@@ -23,13 +23,15 @@ pip install -r requirements.txt
 
 ## Usage
 
-Run the CLI and enter the GPU size in GiB when asked:
+Run the CLI to automatically detect NVIDIA GPUs and use their currently available VRAM:
 
 ```bash
 python3 model_fit_advisor.py
 ```
 
-You can also provide the GPU size directly as a positional argument:
+If NVIDIA detection is unavailable or fails, the CLI falls back to asking for the GPU size in GiB.
+
+To bypass automatic detection, provide the GPU size directly as a manual override:
 
 ```bash
 python3 model_fit_advisor.py 12
