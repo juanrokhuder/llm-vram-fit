@@ -1,6 +1,6 @@
+import argparse
 import json
 import subprocess
-import sys
 from pathlib import Path
 
 import requests
@@ -8,7 +8,7 @@ import requests
 HF_API_BASE_URL = "https://huggingface.co/api/models/"
 REQUEST_TIMEOUT_SECONDS = 30
 
-BYTES_PER_GIB = 1024 ** 3
+BYTES_PER_GIB = 1024**3
 
 # Reserve an estimated amount for CUDA runtime overhead not included in the GGUF artifact size.
 CUDA_OVERHEAD_GIB = 0.5
@@ -21,6 +21,27 @@ BYTES_PER_KV_CACHE_ELEMENT = 2
 MODELS_PATH = Path(__file__).with_name("models.json")
 
 
+def normalize_repo_id(repo_input):
+    """Return a normalized Hugging Face repository ID."""
+    repo_input = repo_input.strip()
+    prefix = "https://huggingface.co/"
+    if repo_input.startswith(prefix):
+        repo_input = repo_input[len(prefix) :]
+
+    return repo_input.rstrip("/")
+
+
+def extract_base_model_repo_id(repo_data):
+    """Return the base-model repository ID declared in repository metadata."""
+    base_model = repo_data.get("cardData", {}).get("base_model")
+    if isinstance(base_model, list):
+        base_model = base_model[0] if base_model else None
+    if not base_model:
+        raise ValueError("The GGUF repository does not identify a base model.")
+
+    return normalize_repo_id(base_model)
+
+
 def fetch_repo_data(repo_id):
     """Fetch and return metadata for a Hugging Face model repository."""
     response = requests.get(
@@ -28,6 +49,39 @@ def fetch_repo_data(repo_id):
     )
     response.raise_for_status()
     return response.json()
+
+
+def fetch_model_config(repo_id):
+    """Fetch and return a Hugging Face model repository's config.json."""
+    response = requests.get(
+        f"https://huggingface.co/{repo_id}/resolve/main/config.json",
+        timeout=REQUEST_TIMEOUT_SECONDS,
+    )
+    response.raise_for_status()
+
+    return response.json()
+
+
+def build_model_entry(repo_input):
+    """Build a model configuration entry from a GGUF repository ID or URL."""
+    repo_id = normalize_repo_id(repo_input)
+    repo_data = fetch_repo_data(repo_id)
+    base_model_repo_id = extract_base_model_repo_id(repo_data)
+    model_config = fetch_model_config(base_model_repo_id)
+    head_dim = model_config.get("head_dim")
+    if head_dim is None:
+        head_dim = model_config["hidden_size"] // model_config["num_attention_heads"]
+
+    return {
+        "name": repo_id.rsplit("/", 1)[-1],
+        "repo_id": repo_id,
+        "num_hidden_layers": model_config["num_hidden_layers"],
+        "num_key_and_value_heads": model_config.get(
+            "num_key_value_heads", model_config["num_attention_heads"]
+        ),
+        "head_dim": head_dim,
+        "max_position_embeddings": model_config["max_position_embeddings"],
+    }
 
 
 def compute_artifact_size_gib(file_size_bytes):
@@ -115,22 +169,39 @@ def detect_nvidia_gpus():
 def main():
     """Run the CLI and generate model fit reports."""
 
-    with open(MODELS_PATH, "r") as f:
-        models = json.load(f)
+    parser = argparse.ArgumentParser(
+        description="Estimate whether GGUF model artifacts fit in available GPU VRAM."
+    )
+
+    parser.add_argument(
+        "gpu_size_gib",
+        nargs="?",
+        type=float,
+        help="Manual available VRAM override in GiB",
+    )
+
+    parser.add_argument(
+        "--repo",
+        help="Hugging Face GGUF repository or URL",
+    )
+
+    args = parser.parse_args()
+
+    if args.repo is not None:
+        models = [build_model_entry(args.repo)]
+    else:
+        with open(MODELS_PATH, "r") as f:
+            models = json.load(f)
 
     gpu_targets = []
     # Use a positional CLI argument when provided, otherwise prompt interactively.
-    if len(sys.argv) > 1:
-        try:
-            gpu_targets.append(
-                {
-                    "name": "Manual override",
-                    "gpu_memory_gib": float(sys.argv[1]),
-                }
-            )
-        except ValueError:
-            print(f"{sys.argv[1]} is not a number.")
-            sys.exit(1)
+    if args.gpu_size_gib is not None:
+        gpu_targets.append(
+            {
+                "name": "Manual override",
+                "gpu_memory_gib": args.gpu_size_gib,
+            }
+        )
     else:
         detected_gpus = detect_nvidia_gpus()
         if detected_gpus:

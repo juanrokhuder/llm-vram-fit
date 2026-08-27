@@ -8,6 +8,10 @@ from model_fit_advisor import (
     compute_max_context,
     compute_usable_context,
     detect_nvidia_gpus,
+    normalize_repo_id,
+    extract_base_model_repo_id,
+    fetch_model_config,
+    build_model_entry,
 )
 
 mock_repo_data = {
@@ -16,6 +20,73 @@ mock_repo_data = {
         {"rfilename": "README.md", "size": 100},
     ]
 }
+
+
+def test_normalize_repo_id():
+    assert normalize_repo_id("Qwen/Qwen3-8B-GGUF") == "Qwen/Qwen3-8B-GGUF"
+    assert (
+        normalize_repo_id(" https://huggingface.co/Qwen/Qwen3-8B-GGUF/ ")
+        == "Qwen/Qwen3-8B-GGUF"
+    )
+
+
+def test_extract_base_model_repo_id():
+    repo_data = {"cardData": {"base_model": "Qwen/Qwen3-8B"}}
+
+    assert extract_base_model_repo_id(repo_data) == "Qwen/Qwen3-8B"
+
+    repo_data = {"cardData": {"base_model": ["Qwen/Qwen3-8B"]}}
+
+    assert extract_base_model_repo_id(repo_data) == "Qwen/Qwen3-8B"
+
+
+def test_fetch_model_config(monkeypatch):
+    class FakeResponse:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"num_hidden_layers": 36}
+
+    monkeypatch.setattr(
+        "model_fit_advisor.requests.get",
+        lambda *args, **kwargs: FakeResponse(),
+    )
+
+    assert fetch_model_config("Qwen/Qwen3-8B") == {"num_hidden_layers": 36}
+
+
+def test_build_model_entry(monkeypatch):
+    repo_data = {"cardData": {"base_model": "Qwen/Qwen3-8B"}}
+
+    monkeypatch.setattr(
+        "model_fit_advisor.fetch_repo_data",
+        lambda repo_id: repo_data,
+    )
+
+    model_config = {
+        "num_hidden_layers": 36,
+        "num_attention_heads": 32,
+        "num_key_value_heads": 8,
+        "hidden_size": 4096,
+        "max_position_embeddings": 40960,
+    }
+
+    monkeypatch.setattr(
+        "model_fit_advisor.fetch_model_config",
+        lambda repo_id: model_config,
+    )
+
+    expected = {
+        "name": "Qwen3-8B-GGUF",
+        "repo_id": "Qwen/Qwen3-8B-GGUF",
+        "num_hidden_layers": 36,
+        "num_key_and_value_heads": 8,
+        "head_dim": 128,
+        "max_position_embeddings": 40960,
+    }
+
+    assert build_model_entry("https://huggingface.co/Qwen/Qwen3-8B-GGUF/") == expected
 
 
 def test_compute_artifact_size_gib():

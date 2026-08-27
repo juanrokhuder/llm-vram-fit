@@ -37,7 +37,19 @@ To bypass automatic detection, provide the GPU size directly as a manual overrid
 python3 model_fit_advisor.py 12
 ```
 
-`models.json` is always loaded from beside the script, so the CLI can be launched from a different directory. `report.txt` is created in the directory from which the command was run.
+To inspect a single Hugging Face GGUF repository instead of every entry in `models.json`, provide its repository ID or URL:
+
+```bash
+python3 model_fit_advisor.py --repo Qwen/Qwen3-0.6B-GGUF
+```
+
+A repository can also be combined with a manual VRAM override:
+
+```bash
+python3 model_fit_advisor.py 12 --repo https://huggingface.co/Qwen/Qwen3-0.6B-GGUF/
+```
+
+When `--repo` is not supplied, `models.json` is loaded from beside the script, so the CLI can be launched from a different directory. `report.txt` is created in the directory from which the command was run.
 
 ## Adding models
 
