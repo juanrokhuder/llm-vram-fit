@@ -101,7 +101,10 @@ Two controlled memory experiments change one setting at a time:
 
 ![Context-length KV-buffer scaling](benchmarks/context_kv_buffer.png)
 
-The concurrency benchmark sends 64-token requests at concurrency levels 1 through 8, with five repetitions per level. In the recorded run, aggregate throughput scaled cleanly through four concurrent requests. At five requests, maximum latency rose sharply from about 0.65 to 1.03 seconds, revealing a queueing and tail-latency boundary even though throughput increased again at higher concurrency.
+The concurrency benchmark begins with warm-up requests, measures a single streamed request's time to first token (TTFT), the total latency and post-first-token streaming duration, then tests 64-token requests at concurrency levels 1 through 8 with five repetitions per level.
+Prompt caching is disabled so repeated prompts are fully evaluated.
+
+Across recorded runs, throughput scales cleanly through four concurrent requests. Beyond that point, tail latency rises sharply and additional concurrency provides diminishing throughput gains, revealing a practical queueing boundary for the mentioned hardware and configuration.
 
 ![llama.cpp concurrency scaling](benchmarks/concurrency_scaling.png)
 

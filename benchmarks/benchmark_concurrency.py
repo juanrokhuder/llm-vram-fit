@@ -1,3 +1,4 @@
+import json
 import os
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -22,11 +23,14 @@ PAYLOAD = {
     "max_tokens": 64,
     "temperature": 0,
     "ignore_eos": True,
+    "cache_prompt": False,
 }
 
 REQUEST_TIMEOUT_SECONDS = 120
 
+
 def run_request():
+    """Send one non-streamed request and return its latency and output metrics."""
     start = time.perf_counter()
 
     response = requests.post(
@@ -52,7 +56,58 @@ def run_request():
     )
 
 
+def run_streaming_request():
+    """Measure user-observed TTFT and total latency for one streamed request."""
+    streaming_payload = PAYLOAD.copy()
+    streaming_payload["stream"] = True
+
+    start = time.perf_counter()
+
+    response = requests.post(
+        LLAMA_SERVER_URL,
+        json=streaming_payload,
+        timeout=REQUEST_TIMEOUT_SECONDS,
+        stream=True,
+    )
+    response.raise_for_status()
+    response.encoding = "utf-8"
+
+    first_token_time = None
+
+    for line in response.iter_lines(decode_unicode=True):
+        if not line:
+            continue
+
+        if not line.startswith("data: "):
+            continue
+
+        event_data = line.removeprefix("data: ")
+        if event_data == "[DONE]":
+            break
+
+        chunk = json.loads(event_data)
+        content = chunk["choices"][0]["delta"].get("content")
+
+        if content:
+            if first_token_time is None:
+                first_token_time = time.perf_counter()
+
+    end = time.perf_counter()
+    if first_token_time is None:
+        raise RuntimeError("Stream ended before any generated content arrived.")
+    time_to_first_token = first_token_time - start
+    total_request_latency = end - start
+    streaming_duration = total_request_latency - time_to_first_token
+
+    return {
+        "time_to_first_token_seconds": time_to_first_token,
+        "total_request_latency_seconds": total_request_latency,
+        "streaming_duration_seconds": streaming_duration,
+    }
+
+
 def run_concurrency_test(concurrency, repetition):
+    """Measure throughput and request latency at one concurrency level."""
     start = time.perf_counter()
     with ThreadPoolExecutor(max_workers=concurrency) as executor:
         futures = [executor.submit(run_request) for _ in range(concurrency)]
@@ -74,9 +129,17 @@ def run_concurrency_test(concurrency, repetition):
         "repetition": repetition,
     }
 
+
 def main():
+    """Run warm ups, streaming measurement and the concurrency benchmark."""
     for _ in range(2):
         run_request()
+
+    streaming_metrics = run_streaming_request()
+    print("Single-request streaming baseline:")
+    for metric, value in streaming_metrics.items():
+        print(f"{metric}: {value:.4f}")
+    print()
 
     repetitions = 5
     benchmark_results = []
